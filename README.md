@@ -1,26 +1,55 @@
-<!--
-Avoid using this README file for information that is maintained or published elsewhere, e.g.:
-
-* metadata.yaml > published on Charmhub
-* documentation > published on (or linked to from) Charmhub
-* detailed contribution guide > documentation or CONTRIBUTING.md
-
-Use links instead.
--->
 
 # multicert
 
-Charmhub package name: operator-template
-More information: https://charmhub.io/multicert
+This is a manual tester charm for multiple tls certificates.
+An attempt at "vectorizing" [tls-certificates-requirer-operator](https://github.com/canonical/tls-certificates-requirer-operator/).
 
-Describe your charm in one or two sentences.
+With the tls-certificates interface we send CSRs over unit data, and receive
+a cert package (the original csr, ca cert, signed cert and chain) back over app
+data.
 
-## Other resources
+This charm is an example of how to combine two multiplicities:
+1. Scaling the app: every unit has its own set of certs.
+2. Multiple certs per unit: the config option takes a comma separated list of
+   unique cert subjects.
 
-<!-- If your charm is documented somewhere else other than Charmhub, provide a link separately. -->
+The cert subject config option + unit name make up the final csr subject
+(product of the two multiplicities).
 
-- [Read more](https://example.com)
+```mermaid
+graph LR
 
-- [Contributing](CONTRIBUTING.md) <!-- or link to other contribution documentation -->
+subgraph multicert
+multicert/0
+multicert/1
 
-- See the [Juju SDK documentation](https://juju.is/docs/sdk) for more information about developing and improving charms.
+multicert/0 ---|peer data: subject to csr mapping| multicert/1
+end
+
+subgraph self-signed-certificates
+ca/0
+end
+
+multicert -->|unit data: csr| self-signed-certificates
+self-signed-certificates -->|app data: csr, ca, cert, chain| multicert
+```
+
+You can give this a try with the following bundle:
+
+```yaml
+bundle: kubernetes
+applications:
+  ca:
+    charm: self-signed-certificates
+    channel: edge
+    revision: 42
+    scale: 1
+  mc:
+    charm: ./multicert_ubuntu-22.04-amd64.charm
+    scale: 2
+    options:
+      cert-subjects: subj3,subj2
+relations:
+- - ca:certificates
+  - mc:certificates
+```
