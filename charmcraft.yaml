@@ -42,6 +42,12 @@ bases:
     - name: ubuntu
       channel: "22.04"
 
+parts:
+  charm:
+    charm-binary-python-packages:
+      - jsonschema
+      - cryptography
+      - ops
 
 # This config section defines charm config options, and populates the Configure
 # tab on Charmhub.
@@ -55,3 +61,14 @@ config:
         Comma-separated cert subjects
       default: "default-cert"
       type: string
+
+requires:
+  certificates:
+    interface: tls-certificates
+    limit: 1
+    description: |
+      Send a CSR to- and obtain a signed certificate from a CA.
+
+peers:
+  peers:
+    interface: multicert_peers

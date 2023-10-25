@@ -19,3 +19,12 @@ class TestCharm(unittest.TestCase):
     def test_config_changed(self):
         # Trigger a config-changed event with an updated value
         self.harness.update_config({"cert-subjects": "subj1,subj2"})
+
+    def test_certs_relation(self):
+        relation_id = self.harness.add_relation("certificates", "ca")
+        self.harness.add_relation_unit(relation_id, "ca/0")
+
+    def test_certs_relation_with_config(self):
+        relation_id = self.harness.add_relation("certificates", "ca")
+        self.harness.add_relation_unit(relation_id, "ca/0")
+        self.harness.update_config({"cert-subjects": "subj1,subj2"})
