@@ -72,3 +72,13 @@ requires:
 peers:
   peers:
     interface: multicert_peers
+
+actions:
+  renew:
+    description: |
+      Renew a cert.
+    params:
+      cert-subject:
+        type: string
+        description: The subject of the cert to be renewed.
+    required: [cert-subject]

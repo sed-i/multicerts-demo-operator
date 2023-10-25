@@ -53,6 +53,41 @@ class MulticertCharm(ops.CharmBase):
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on["peers"].relation_created, self._on_peer_relation_created)
         self.framework.observe(self.on["peers"].relation_joined, self._on_peer_relation_joined)
+        self.framework.observe(self.on.renew_action, self._on_renew_action)
+
+    def _on_renew_action(self, event):
+        existing = self.model.config["cert-subjects"].split(",")
+        subj = event.params["cert-subject"]
+
+        if not existing:
+            event.fail(f"Cannot renew {subj}: current subject list is empty.")
+            return
+
+        if subj not in existing:
+            event.fail(f"Cannot renew {subj}: not present in current subject list.")
+            return
+
+        csr = self._redner_csr(cert_subject=subj, sans=[f"{subj}.{socket.getfqdn()}"])
+
+        # Assuming the peer relation is already in place by the time config-changed is emitted.
+        peer_data = self._peer_data
+        assert peer_data is not None
+        csr_map = json.loads(peer_data.get("csr_map", "{}"))
+        subj = self._render_full_subject(subj)
+        old_csr = csr_map[subj]
+
+        self.certificates.request_certificate_renewal(
+            old_certificate_signing_request=old_csr.encode(),
+            new_certificate_signing_request=csr,
+        )
+
+        # NOTE: here the csr is replaced right away, without waiting for a cert to return.
+        #  This is probably ok, because the cert package coming back over app data includes a
+        #  matching CSR together with the cert, so there is still a way to keep track.
+        csr_map[subj] = csr.decode().strip()
+        peer_data.update({"csr_map": json.dumps(csr_map)})
+
+        event.set_results({"result": csr_map[subj]})
 
     def _on_config_changed(self, event: ops.ConfigChangedEvent):
         """Handle changed configuration.
@@ -79,6 +114,9 @@ class MulticertCharm(ops.CharmBase):
             return peer_relation.data[self.unit]
         return None
 
+    def _render_full_subject(self, subject: str):
+        return f"{self.unit.name.replace('/', '-')}-{subject}"
+
     def _commit_cert_subjects(self):
         if not self.certs_enabled:
             return
@@ -94,17 +132,17 @@ class MulticertCharm(ops.CharmBase):
         # The config option may be unset
         if cert_subjects := self.model.config["cert-subjects"]:
             # Charm may be scaled up, and we want each unit to render its own CSRs
-            per_unit_cert_names = {
-                f"{self.unit.name.replace('/', '-')}-{subj}" for subj in cert_subjects.split(",")
+            per_unit_cert_subj = {
+                f"{self._render_full_subject(subj)}" for subj in cert_subjects.split(",")
             }
         else:
-            per_unit_cert_names = {}
+            per_unit_cert_subj = set()
 
         # Compare the (potentially new) cert subjects to what's already there.
         # Stale subjects need to be revoked and new subjects need to be requested.
         old_subjects = set(json.loads(peer_data.get("requested_subjects", "[]")))
-        stale_subjects = old_subjects.difference(per_unit_cert_names)
-        new_subjects = per_unit_cert_names.difference(old_subjects)
+        stale_subjects = old_subjects.difference(per_unit_cert_subj)
+        new_subjects = per_unit_cert_subj.difference(old_subjects)
 
         csr_map = {}
         for subj in new_subjects:
@@ -121,7 +159,7 @@ class MulticertCharm(ops.CharmBase):
 
         # Update peer data.
         # TODO serialize using pydantic
-        peer_data.update({"requested_subjects": json.dumps(list(per_unit_cert_names))})
+        peer_data.update({"requested_subjects": json.dumps(list(per_unit_cert_subj))})
         peer_data.update({"csr_map": json.dumps({**prev_csr_map, **csr_map})})
 
     @property
@@ -140,6 +178,8 @@ class MulticertCharm(ops.CharmBase):
         Args:
             cert_subject: Custom subject. Name collisions are under the caller's responsibility.
             sans: DNS names. If none are given, use FQDN.
+
+        TODO: sanitize subj.
         """
         # Use fqdn only if no SANs were given, and drop empty/duplicate SANs
         sans = list(set(filter(None, (sans or [socket.getfqdn()]))))
